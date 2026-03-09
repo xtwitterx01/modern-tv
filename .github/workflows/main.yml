@@ -58,7 +58,6 @@ jobs:
           dotnet build -c Release
           dotnet run -c Release
 
-      # === Tailscale الجديد بالـ OAuth (الخطوة المهمة) ===
       - name: Connect to Tailscale
         uses: tailscale/github-action@v4
         with:
@@ -74,8 +73,9 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force
 
-          netsh advfirewall firewall delete rule name="RDP-Tailscale" -ErrorAction SilentlyContinue
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
+          # اصلاح اوامر الفايروال (بدون ErrorAction)
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" > $null 2>&1
+          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389 > $null 2>&1
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
           Restart-Service TermService -Force -ErrorAction SilentlyContinue
 
@@ -105,7 +105,12 @@ jobs:
           # === Send Credentials to Webhook ===
           $msg = "✅ Tailscale RDP Ready`n`nIP: $tsIP`nUser: $usr`nPass: $pwd`n`nRunner: gh-runner-${{ github.run_id }}"
           $body = @{ content = $msg } | ConvertTo-Json
-          Invoke-RestMethod -Uri "${{ secrets.WEBHOOK_URL }}" -Method POST -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
+          # استخدمنا المتغير الصحيح هنا بعد إضافة السر في GitHub
+          if ("${{ secrets.WEBHOOK_URL }}" -ne "") {
+              Invoke-RestMethod -Uri "${{ secrets.WEBHOOK_URL }}" -Method POST -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
+          } else {
+              Write-Host "Webhook URL is missing. Check your GitHub Secrets."
+          }
 
       - name: Run Diagnostics
         run: |
@@ -120,7 +125,9 @@ jobs:
           $rep += "Tailscale Process: $(if($tp){'Running'}else{'Not Found'})`n"
           $rep += "Tailscale IP: $env:TAILSCALE_IP`n"
           $body = @{ content = $rep } | ConvertTo-Json
-          Invoke-RestMethod -Uri "${{ secrets.WEBHOOK_URL }}" -Method POST -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
+          if ("${{ secrets.WEBHOOK_URL }}" -ne "") {
+              Invoke-RestMethod -Uri "${{ secrets.WEBHOOK_URL }}" -Method POST -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
+          }
 
       - name: Run Extended Validation (5 ساعات ونصف)
         run: |
@@ -137,6 +144,7 @@ jobs:
       - name: Cleanup Environment
         if: always()
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" down -ErrorAction SilentlyContinue
+          # ازالة ErrorAction من اوامر Tailscale العادية
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" down > $null 2>&1
           Get-Process -Name "tailscale" -ErrorAction SilentlyContinue | Stop-Process -Force
           Write-Host "Session ended after 5.5 hours."
