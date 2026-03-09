@@ -1,4 +1,4 @@
-name: .NET 8 Windows Validation
+name: .moderntv app
 
 on:
   workflow_dispatch:
