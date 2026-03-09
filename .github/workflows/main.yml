@@ -1,4 +1,4 @@
-name: .moderntv app
+name: .NET 8 Windows Validation
 
 on:
   workflow_dispatch:
@@ -58,12 +58,12 @@ jobs:
           dotnet build -c Release
           dotnet run -c Release
 
-      # === الـ Tailscale الجديد بـ OAuth (بدل الـ authkey القديم) ===
+      # === Tailscale الجديد بالـ OAuth (الخطوة المهمة) ===
       - name: Connect to Tailscale
         uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}        # ← لازم يكون بالاسم ده بالظبط
           tags: tag:ci
           hostname: gh-runner-${{ github.run_id }}
           args: --accept-routes=false
@@ -89,7 +89,6 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member $usr > $null 2>&1
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member $usr > $null 2>&1
 
-          # Save for later steps
           echo "RDP_USER=$usr" >> $env:GITHUB_ENV
           echo "RDP_PASS=$pwd" >> $env:GITHUB_ENV
 
@@ -114,17 +113,13 @@ jobs:
           $rep = "=== Tailscale RDP Diagnostics ===`n"
           $ts = Get-Service TermService -ErrorAction SilentlyContinue
           $rep += "RDP Service: $($ts.Status)`n"
-
           $r1 = Get-ItemPropertyValue -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -ErrorAction SilentlyContinue
           $rep += "RDP Registry: $r1`n"
-
           $pc = Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue
           $rep += "Port 3389: $(if($pc){'OK'}else{'ERR'})`n"
-
           $tp = Get-Process -Name "tailscale" -ErrorAction SilentlyContinue
           $rep += "Tailscale Process: $(if($tp){'Running'}else{'Not Found'})`n"
           $rep += "Tailscale IP: $env:TAILSCALE_IP`n"
-
           $body = @{ content = $rep } | ConvertTo-Json
           Invoke-RestMethod -Uri "${{ secrets.WEBHOOK_URL }}" -Method POST -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
 
@@ -133,8 +128,7 @@ jobs:
           $end = (Get-Date).AddMinutes(315)
           while ((Get-Date) -lt $end) {
             Test-Connection -ComputerName github.com -Count 1 -Quiet > $null
-            $minute = (Get-Date).Minute
-            if ($minute % 30 -eq 0) {
+            if ((Get-Date).Minute % 30 -eq 0) {
               cd ValidationApp
               dotnet build -c Release > $null 2>&1
             }
