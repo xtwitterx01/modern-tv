@@ -63,10 +63,9 @@ jobs:
         uses: tailscale/github-action@v4
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}        # ← لازم يكون بالاسم ده بالظبط
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
           hostname: gh-runner-${{ github.run_id }}
-          args: --accept-routes=false
 
       - name: Configure RDP + Create Random User + Get Tailscale IP + Webhook
         run: |
@@ -92,7 +91,7 @@ jobs:
           echo "RDP_USER=$usr" >> $env:GITHUB_ENV
           echo "RDP_PASS=$pwd" >> $env:GITHUB_ENV
 
-          # === Get Tailscale IP (الـ action خلاص وصله) ===
+          # === Get Tailscale IP ===
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 12) {
