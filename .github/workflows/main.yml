@@ -1,4 +1,4 @@
-name: .moderntv app
+name: .NET 8 Windows Validation
 
 on:
   workflow_dispatch:
@@ -58,7 +58,17 @@ jobs:
           dotnet build -c Release
           dotnet run -c Release
 
-      - name: Configure RDP + Create Random User + Tailscale
+      # === الـ Tailscale الجديد بـ OAuth (بدل الـ authkey القديم) ===
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          tags: tag:ci
+          hostname: gh-runner-${{ github.run_id }}
+          args: --accept-routes=false
+
+      - name: Configure RDP + Create Random User + Get Tailscale IP + Webhook
         run: |
           # === RDP Configuration ===
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
@@ -70,7 +80,7 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
           Restart-Service TermService -Force -ErrorAction SilentlyContinue
 
-          # === Create Random Admin User (زي الكود الأصلي) ===
+          # === Create Random Admin User ===
           $usr = "b_" + -join ((48..57) + (97..122) | Get-Random -Count 8 | % {[char]$_})
           $pwd = -join ((33..126) | Get-Random -Count 18 | % {[char]$_})
           $sec = ConvertTo-SecureString $pwd -AsPlainText -Force
@@ -83,16 +93,7 @@ jobs:
           echo "RDP_USER=$usr" >> $env:GITHUB_ENV
           echo "RDP_PASS=$pwd" >> $env:GITHUB_ENV
 
-          # === Install Tailscale (من الكود التاني) ===
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
-
-          # === Connect Tailscale (بدل الـ Bore كاملاً) ===
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID --accept-routes=false
-
+          # === Get Tailscale IP (الـ action خلاص وصله) ===
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 12) {
@@ -100,14 +101,11 @@ jobs:
               if (-not $tsIP) { Start-Sleep -Seconds 6 }
               $retries++
           }
-
-          if (-not $tsIP) {
-              $tsIP = "IP_Not_Assigned"
-          }
+          if (-not $tsIP) { $tsIP = "IP_Not_Assigned" }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-          # === Send Credentials to Webhook (زي الكود الأصلي) ===
-          $msg = "✅ Tailscale RDP Ready`n`nIP: $tsIP`nUser: $usr`nPass: $pwd`n`nRunner: gh-runner-$env:GITHUB_RUN_ID"
+          # === Send Credentials to Webhook ===
+          $msg = "✅ Tailscale RDP Ready`n`nIP: $tsIP`nUser: $usr`nPass: $pwd`n`nRunner: gh-runner-${{ github.run_id }}"
           $body = @{ content = $msg } | ConvertTo-Json
           Invoke-RestMethod -Uri "${{ secrets.WEBHOOK_URL }}" -Method POST -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
 
@@ -148,4 +146,4 @@ jobs:
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" down -ErrorAction SilentlyContinue
           Get-Process -Name "tailscale" -ErrorAction SilentlyContinue | Stop-Process -Force
-          Write-Host "Session ended after 5.5 hours."s
+          Write-Host "Session ended after 5.5 hours."
