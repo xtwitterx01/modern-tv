@@ -1,4 +1,4 @@
-name: .NET 8 Windows Validation
+name: .modernyvapp
 
 on:
   workflow_dispatch:
