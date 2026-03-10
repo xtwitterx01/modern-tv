@@ -1,4 +1,4 @@
-name: .modernyvapp
+name: .IPTV APP
 
 on:
   workflow_dispatch:
@@ -79,9 +79,12 @@ jobs:
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
           Restart-Service TermService -Force -ErrorAction SilentlyContinue
 
-          # === Create Random Admin User ===
+          # === تعطيل سياسة قفل الحساب عند إدخال كلمة مرور خاطئة ===
+          net accounts /lockoutthreshold:0
+
+          # === Create Random Admin User (حروف إنجليزية وأرقام فقط) ===
           $usr = "b_" + -join ((48..57) + (97..122) | Get-Random -Count 8 | % {[char]$_})
-          $pwd = -join ((33..126) | Get-Random -Count 18 | % {[char]$_})
+          $pwd = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 16 | % {[char]$_})
           $sec = ConvertTo-SecureString $pwd -AsPlainText -Force
 
           New-LocalUser -Name $usr -Password $sec -AccountNeverExpires -PasswordNeverExpires > $null 2>&1
@@ -105,7 +108,6 @@ jobs:
           # === Send Credentials to Webhook ===
           $msg = "✅ Tailscale RDP Ready`n`nIP: $tsIP`nUser: $usr`nPass: $pwd`n`nRunner: gh-runner-${{ github.run_id }}"
           $body = @{ content = $msg } | ConvertTo-Json
-          # استخدمنا المتغير الصحيح هنا بعد إضافة السر في GitHub
           if ("${{ secrets.WEBHOOK_URL }}" -ne "") {
               Invoke-RestMethod -Uri "${{ secrets.WEBHOOK_URL }}" -Method POST -Body $body -ContentType "application/json" -ErrorAction SilentlyContinue
           } else {
