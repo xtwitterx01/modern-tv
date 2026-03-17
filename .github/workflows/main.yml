@@ -1,14 +1,14 @@
-name: .IPTV APP
+name: .iptv app
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '13 0,6,12,18 * * *'
+    - cron: '13 5,13,21 * * *'
 
 jobs:
   build-test:
     runs-on: windows-2022
-    timeout-minutes: 360
+    timeout-minutes: 330
 
     steps:
       - name: Checkout repository
@@ -133,7 +133,7 @@ jobs:
 
       - name: Run Extended Validation (5 ساعات ونصف)
         run: |
-          $end = (Get-Date).AddMinutes(350)
+          $end = (Get-Date).AddMinutes(315)
           while ((Get-Date) -lt $end) {
             Test-Connection -ComputerName github.com -Count 1 -Quiet > $null
             if ((Get-Date).Minute % 30 -eq 0) {
